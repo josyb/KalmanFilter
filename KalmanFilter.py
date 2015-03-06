@@ -2,24 +2,47 @@
 Created on 10 Feb 2015
 
 @author: Josy
+
+# Copyright (c) 2015- Josy Boelen
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Lesser General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Lesser General Public License for more details.
+#
+# You should have received a copy of the GNU Lesser General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
 '''
 
-import os
+import os, random 
+import matplotlib.pyplot as plt
 from myhdl import *
 import hdlutils
 
 
-def alu(Clk, DA, DB, Q, ena , sclr):  
+def accu(Clk, D, Q, ena , sclr):  
+    lq = Signal(intbv(0)[len(Q):])
+    
     @always_seq(Clk.posedge, reset = None)
     def adder():
         if sclr or ena:
             if sclr:
                 # overrides ena
-                Q.next = 0
+                lq.next = 0
             else:
-                Q.next  = DA + DB
-    
-    return adder
+                lq.next  = lq + D
+                
+    @always_comb
+    def assignouts():
+        Q.next = lq
+        
+    return adder, assignouts
+
 
 def shiftl(Clk, D, Q, ld, ena):
     WIDTH_S = len(Q)
@@ -41,6 +64,7 @@ def shiftl(Clk, D, Q, ld, ena):
             
     return shift, assignouts
 
+
 def shiftr(Clk, D, Q, ld, ena):
     lq = Signal(intbv(0)[len(Q):])
     
@@ -58,36 +82,26 @@ def shiftr(Clk, D, Q, ld, ena):
                 
     return shift, assignouts
 
+
 def KalmanFilter(WIDTH_DQ, WIDTH_COEFF, Clk, Reset, D, StrobeIn, Q, StrobeOut, CoeffA, CoeffB):
     ''' a low-resource usage Kalman Filter  
-        (re-) using a single addder
+        (re-) using a single adder / accumulator
     '''
     
-    # we have two state machines
-    # one sequencing the Kalman filter operation
-    # the second sequencing the multiplication
-    kf_state = enum( "kf_IDLE", "kf_Ynm1A", "kf_XnB", "kf_Yn", "kf_ROUND", "kf_RESULT" )
+    kf_state = enum( "kf_IDLE", "kf_Ynm1A", "kf_XnB", "kf_ROUND", "kf_RESULT" )
     smkfp , smkfn = [Signal( kf_state.kf_IDLE ) for _ in range( 2 )]
-    mpy_state = enum( "mpy_IDLE", "mpy_MPY" )
-    smmpyp , smmpyn = [Signal( mpy_state.mpy_IDLE ) for _ in range( 2 )]
-    startmpy = Signal(bool(0))
-    mpydone = Signal(bool(0))
-    xnb = Signal(intbv(0)[WIDTH_DQ + WIDTH_COEFF:])
     ldyn = Signal(bool(0))
-    ldxnb = Signal(bool(0))
-    yn = Signal(intbv(0)[WIDTH_DQ + WIDTH_COEFF:])
-    addDA, addDB = [Signal(intbv(0)[WIDTH_DQ+WIDTH_COEFF*2:]) for _ in range(2)]
+    yn = Signal(intbv(0)[WIDTH_DQ:])
+    addDB = Signal(intbv(0)[WIDTH_DQ+WIDTH_COEFF:])
     addena, addsclr = [Signal(bool(0)) for _ in range(2)]
-    add_Q = Signal(intbv(0)[WIDTH_DQ+WIDTH_COEFF*2+1:])
-    shiftad = Signal(intbv(0)[WIDTH_DQ+WIDTH_COEFF*2:])
-    shifta_Q = Signal(intbv(0)[WIDTH_DQ+WIDTH_COEFF*2:])
+    add_Q = Signal(intbv(0)[WIDTH_DQ+WIDTH_COEFF+1:])
+    shiftad = Signal(intbv(0)[WIDTH_DQ+WIDTH_COEFF:])
+    shifta_Q = Signal(intbv(0)[WIDTH_DQ+WIDTH_COEFF:])
     shiftld, shiftshift = [Signal(bool(0)) for _ in range(2)] 
     shiftcd = Signal(intbv(0)[WIDTH_DQ:])
     shiftc_Q = Signal(intbv(0)[WIDTH_DQ+WIDTH_COEFF:])
-    mpycountsld, mpycountcnten = [Signal(bool(0)) for _ in range(2)]
-    mpycountdata, mpycount = [Signal(intbv(0)[hdlutils.widthu(WIDTH_COEFF*2):]) for _ in range(2)]
 
-    add = alu(Clk, addDA, addDB, add_Q, addena, addsclr)
+    add = accu(Clk, addDB, add_Q, addena, addsclr)
     shifta = shiftl(Clk, shiftad, shifta_Q, shiftld, shiftshift)
     shiftc = shiftr(Clk, shiftcd, shiftc_Q, shiftld, shiftshift)
     
@@ -95,118 +109,71 @@ def KalmanFilter(WIDTH_DQ, WIDTH_COEFF, Clk, Reset, D, StrobeIn, Q, StrobeOut, C
     def smcomb():
         addena.next = 0
         addsclr.next = 0
-        startmpy.next = 0
-        mpydone.next = 0
         shiftld.next = 0
         shiftshift.next = 0
-        shiftad.next = 0
-        shiftcd.next = 0
-        ldxnb.next = 0
-        mpycountsld.next = 0
-        mpycountcnten.next = 0
         ldyn.next = 0
-        mpycountdata.next = 0
+        # these default assignments save a multiplexer (each)
+        shiftad.next = D
+        shiftcd.next = CoeffB
+        addDB.next = shifta_Q
         
         # assign the output data
-        Q.next = yn[:WIDTH_COEFF]
+        Q.next = yn
 
         # the sequencer state machine
         if smkfp == kf_state.kf_IDLE:
             if StrobeIn:
-                smkfn.next = kf_state.kf_XnB
-                mpycountdata.next = WIDTH_COEFF
-                mpycountsld.next = 1
-                shiftad.next = D
-                shiftcd.next = CoeffB
-                shiftld.next = 1
-                addsclr.next = 1
-                startmpy.next = 1
+                smkfn.next = kf_state.kf_XnB    # this is the first step
+                shiftld.next = 1                # load the shift-registers with the default selection
+                addsclr.next = 1                # clear the adder / accumulator
             else:
                 smkfn.next = kf_state.kf_IDLE
          
         elif smkfp == kf_state.kf_XnB:
-            addDA.next = add_Q
-            addDB.next = shifta_Q
-            if mpydone:
+            addena.next = shiftc_Q[0]           # but only if we have a '1' for this round
+            if shiftc_Q == 0:                   # we have shifted out all '1' bits
                 smkfn.next = kf_state.kf_Ynm1A
-                ldxnb.next = 1    
-                mpycountdata.next = WIDTH_COEFF
-                mpycountsld.next = 1
-                shiftad.next = yn           # we will shift the data left
-                shiftcd.next = CoeffA       # and the coefficients to the right
-                shiftld.next = 1            # load bot shiftregisters
-                addsclr.next = 1            # and clear the adder, because it's output will be fed back
-                startmpy.next = 1        
+                shiftad.next = yn               # we will shift the previous result left
+                shiftcd.next = CoeffA           # and the coefficients to the right
+                shiftld.next = 1                # load both shift-registers
+                                                # actually  we don't clear the 'accumulator' so we don't need to store the result
+                                                # and don't have to execute a separate adding step at the end ...
             else :
                 smkfn.next = kf_state.kf_XnB    
+                shiftshift.next = 1             # shift both shift-registers one step (left or right)
 
              
         elif smkfp == kf_state.kf_Ynm1A:
-            addDA.next = add_Q              # feed the adder's result back
-            addDB.next = shifta_Q           # the shifted-left data to add
-            if mpydone:
-                smkfn.next = kf_state.kf_Yn
+            addena.next = shiftc_Q[0]           # but only if we have a '1' for this round
+            if shiftc_Q == 0:
+                smkfn.next = kf_state.kf_ROUND
             else :
                 smkfn.next = kf_state.kf_Ynm1A    
-                              
-        elif smkfp == kf_state.kf_Yn:
-            smkfn.next = kf_state.kf_ROUND
-            addDA.next = add_Q[:WIDTH_COEFF]              # use the last result
-            addDB.next = xnb                # and add the stored previous result
-            addena.next = 1
-            
+                shiftshift.next = 1
+
         elif smkfp == kf_state.kf_ROUND:
             smkfn.next = kf_state.kf_RESULT
-            addDA.next = add_Q                  # use the last result
-            addDB.next = 0 #2**(WIDTH_COEFF - 1)   # to round to nearest integer
+            addDB.next = 2**(WIDTH_COEFF - 1)   # to round to nearest integer, but this creates an error in regard to the theoretically calculated result
             addena.next = 1
                 
         elif smkfp == kf_state.kf_RESULT:
             smkfn.next = kf_state.kf_IDLE
             ldyn.next = 1                   # tell it is the final result
-        
-        # the multiply state machine
-        if smmpyp == mpy_state.mpy_IDLE:
-            if startmpy:
-                smmpyn.next = mpy_state.mpy_MPY                
-            else:
-                smmpyn.next = mpy_state.mpy_IDLE
-                
-        elif smmpyp == mpy_state.mpy_MPY :
-            if mpycount == 0:
-                mpydone.next = 1
-                if startmpy:
-                    smmpyn.next = mpy_state.mpy_MPY                
-                else:
-                    smmpyn.next = mpy_state.mpy_IDLE    
-            else:
-                smmpyn.next = mpy_state.mpy_MPY
-                addena.next = shiftc_Q[0]       # but only if we have a '1' for this round
-                mpycountcnten.next = 1
-                shiftshift.next = 1
-            
+  
         
     @always_seq(Clk.posedge, reset=Reset)
     def smprocess():
         smkfp.next = smkfn
-        smmpyp.next = smmpyn
         StrobeOut.next = 0
         if ldyn:
             StrobeOut.next = 1
+  
             
     @always_seq(Clk.posedge, reset=None)
     def registers():
-        if mpycountsld or mpycountcnten:
-            if mpycountsld:                  
-                mpycount.next = mpycountdata      #
-            else:
-                mpycount.next = mpycount -1
-
-        if ldxnb:
-            xnb.next = add_Q
-            
         if ldyn:
-            yn.next = add_Q
+            yn.next = add_Q[:WIDTH_COEFF]
+ 
             
     return add, shifta, shiftc, smcomb, smprocess, registers 
      
@@ -216,7 +183,10 @@ def test_KalmanFilter():
 
     tCK = 10
     ClkCount = Signal(intbv(0)[32:])
+    random.seed('C-Cam')
     
+ 
+            
     @instance
     def clkgen():
         yield hdlutils.genClk(Clk, tCK, ClkCount)
@@ -228,18 +198,25 @@ def test_KalmanFilter():
             
     @instance
     def stimulusin():
-        yield hdlutils.MMdelay(Clk, tCK, 5)
+        yield hdlutils.delayclks(Clk, tCK, 5)
         CoeffB.next = KalmanCoeffB
         CoeffA.next = KalmanCoeffA
-        D.next =  0x800
-        for _ in range( SimRounds ):
+        for i in range( SimRounds ):
+            D.next = td[i]
             yield hdlutils.pulsesig(Clk, tCK, StrobeIn, 1, 1)
-            yield hdlutils.MMdelay(Clk, tCK, 2 * (WIDTH_DQ + WIDTH_COEFF) + 10)
+            yield hdlutils.delayclks(Clk, tCK, 2 * (WIDTH_DQ + WIDTH_COEFF) + 10)
+        
+        
+
+    @instance
+    def monitor():
+        for _ in range(SimRounds):
+            yield hdlutils.waitsig(Clk, tCK, StrobeOut, True)
+            qr.append(int(Q))
         raise StopSimulation
-    
+
     return instances()
-
-
+        
 def convert():
     # force std_logic_vectors instead of unsigned in Interface
     toVHDL.numeric_ports = False
@@ -248,14 +225,41 @@ def convert():
     toVerilog(KalmanFilter, WIDTH_DQ, WIDTH_COEFF, Clk, Reset, D, StrobeIn, Q, StrobeOut, CoeffA, CoeffB)
 
 
+class KalmanSimple(object):
+    def __init__(self, q, r ,p, iv):
+        self.q = q      # process noise variance
+        self.r = r      # measurement noise covariance
+        self.p = p      # estimation error covariance
+        self.x = iv     # value
+        self.k = 0      # don't know the kalman gain yet
+        
+    def update(self, m):
+        # prediction update
+        self.p += self.q
+        # measurement update
+        self.k = self.p / (self.p + self.r)
+        self.x = self.x + self.k * (m - self.x)
+        self.p = (1 - self.k) * self.p
+        return self.x,self.k
+
 if __name__ == '__main__':
     WIDTH_DQ = 12
     WIDTH_COEFF = 10
-    KalmanCoeff = 0.19
-    SimRounds = 256
+    KalmanCoeff = 0.009
+    SimRounds = 1024
     KalmanCoeffB = int(round(KalmanCoeff * 2 ** WIDTH_COEFF))
-    KalmanCoeffA = int(round(2 ** WIDTH_COEFF - 1 - KalmanCoeff * 2 ** WIDTH_COEFF))
-    print KalmanCoeffA, KalmanCoeffB
+    KalmanCoeffA = int(round(2 ** WIDTH_COEFF - KalmanCoeff * 2 ** WIDTH_COEFF))
+    if KalmanCoeffA + KalmanCoeffB != 2**WIDTH_COEFF:
+        print 'Kalman Filter Coefficients ({:6f}, {:6f}) do not add up to 1! Expect a DC-offset Error' .format( 1024.0 / KalmanCoeffA, 1024.0 / KalmanCoeffB)
+        
+    td = []
+    tr = []
+    yn = 0
+    for i in range(SimRounds):
+        td.append( int(random.gauss( 0x800,  0x100 )) )
+        yn = yn * (1.0 - KalmanCoeff) + td[i] * KalmanCoeff
+        tr.append( yn )
+    qr = []
     Clk = Signal(bool(0))
     Reset = ResetSignal(0, active=1, async=True)
     D = Signal(intbv(0)[WIDTH_DQ:])
@@ -263,7 +267,45 @@ if __name__ == '__main__':
     CoeffA, CoeffB = [Signal(intbv(0)[WIDTH_COEFF:]) for _ in range(2)]
     StrobeIn , StrobeOut  = [ Signal(bool(0)) for _ in range(2) ]
     
-    os.chdir( "./out")
+#     os.chdir( "./out")
     hdlutils.simulate(600000, test_KalmanFilter)
-    convert()
+    convert()       # must do this before plotting etc otherwise a conflicts raises an exception
+    
+    
+    # plot the results against the theory
+    sk = KalmanSimple( 0.001, 32.0, 10.0, 0)
+    
+    average = [0x800 for _ in range(SimRounds)]
+    kalmansx = []
+    kalmansk = []
+    
+    for i in range(SimRounds):
+        x,k = sk.update( td[i] )
+        kalmansx.append( x )
+        kalmansk.append( k )
+    
+    fig, ax1 = plt.subplots()
+    ax1.axis( [0, SimRounds, 0, 4095])
+    lines = ax1.plot( range(SimRounds), average, 'b', label = 'Average')
+    lines += ax1.plot( range(SimRounds), td, 'c', label = 'Measured')
+    lines += ax1.plot(range(SimRounds), tr, 'g', label = 'Calculated' )
+    lines += ax1.plot(range(SimRounds), qr, 'm', label = 'RTL Result')
+    lines += ax1.plot(range(SimRounds), kalmansx,'y' , label = "Kalman Simple" )
+    ax1.set_ylabel('DNU')
+
+    ax2 = ax1.twinx()
+    ax2.axis( [0, SimRounds, 0, 0.4095])
+    lines += ax2.plot( range(SimRounds), kalmansk,'r' , label = 'Kalman Simple Gain')
+    ax2.set_ylabel('kalman simple gain', color='r')
+    for tl in ax2.get_yticklabels():
+        tl.set_color('r')
+    
+    labs =[l.get_label() for l in lines]
+    plt.legend( lines, labs, loc = 0, frameon = False)
+    plt.grid()
+    plt.title('Kalman Filter')
+    plt.savefig( "KalmanFilter-plot.pdf", format = 'pdf') # this doesn't look as good as the one you save 'manually' from the display window
+    plt.show()
+    
+    print 'All done!'
 
