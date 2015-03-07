@@ -10,7 +10,7 @@ After a while it turned out that we can get away with one large adder to do the 
 There are plentyful resources on the web, so I'm not going to cover much more than the bare necessities to explain what I've done.  
 The basic formula is:  
 ```text
-y(n+1)  = a.y(n) + b.x(n)
+y(n)  = a.y(n-1) + b.x(n)
 ```
 For a _true_ Kalman Filter the coefficients _a_ and _b_ are variable and adapted in time.  
 We don't have the resources, as we are using an EP1C6 device without multipliers. And we wanted to keep the resource usage and develoment time low, so we implemented the filter with a fixed _gain_. It then efectively becomes a low pass filter.
@@ -21,11 +21,11 @@ The above formula is normally calculated in _Floating Point Arithemetic_ which a
 Instead we use _'Scaled Integer Arithmetic'_. A scaling factor of about 1000 is usually a good starting point, so we chose to scale by 1024. The above coefficients then become 1015 and 9 respectively. 
 The formula becomes then:
 ```text
-y(n+1) = (a.y(n) + b.x(n)) / 1024
+y(n) = (a.y(n-1) + b.x(n)) / 1024
 ```
 The division by 1024, the 'scaling', has the side efect of rounding (by truncation) towards _negative infinity_, so we will make it round to the nearest integer by adding half of the scaling factor before doing the scaling operation:
 ```text
-y(n+1) = (a.y(n) + b.x(n) + 1024/2 ) / 1024
+y(n) = (a.y(n-1) + b.x(n) + 1024/2 ) / 1024
 ```
 
 t.b.c. ...
