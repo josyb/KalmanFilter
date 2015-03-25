@@ -258,7 +258,7 @@ if __name__ == '__main__':
     if KalmanCoeffA + KalmanCoeffB < 2**WIDTH_COEFF:
         print 'Kalman Filter Coefficients ({:6f}, {:6f}) are less than 1! Expect a DC-offset Error' .format( 1024.0 / KalmanCoeffA, 1024.0 / KalmanCoeffB)
     elif KalmanCoeffA + KalmanCoeffB > 2**WIDTH_COEFF:
-        print 'Kalman Filter Coefficients ({:6f}, {:6f}) are greater than 1! Expect an overshoot, or a rub-away?' .format( 1024.0 / KalmanCoeffA, 1024.0 / KalmanCoeffB)
+        print 'Kalman Filter Coefficients ({:6f}, {:6f}) are greater than 1! Expect an overshoot, or a run-away?' .format( 1024.0 / KalmanCoeffA, 1024.0 / KalmanCoeffB)
 
     # Build a list of testdata = average + noise
     td = [] # testdat to feed
